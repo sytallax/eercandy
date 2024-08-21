@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -33,15 +34,19 @@ type SpotifyConnector struct {
 	ClientSecret string
 	codeVerifier string
 	oauthCode    string
-	accessToken  string
+	accessToken  SpotifyAccessToken
 }
 
-type accessToken struct {
-	AccessToken  string `json:"access_token"`
-	TokenType    string `json:"token_type"`
+type SpotifyAccessToken struct {
+	Token        string
+	ExpiresIn    time.Time
 	Scope        string
-	ExpiresAt    time.Time
-	RefreshToken string `json:"refresh_token"`
+	RefreshToken string
+}
+
+type SpotifyError struct {
+	Error            string `json:"error"`
+	ErrorDescription string `json:"error_description"`
 }
 
 func NewSpotifyConnector() (*SpotifyConnector, error) {
@@ -88,7 +93,7 @@ func (c *SpotifyConnector) RedirectToAuthCodeFlow() (string, error) {
 	return base.String(), nil
 }
 
-func (s *SpotifyConnector) SetOauthCode(c echo.Context) error {
+func (s *SpotifyConnector) GetAccessToken(c echo.Context) error {
 	switch c.QueryParam("error") {
 	case "access_denied":
 		return c.String(http.StatusUnauthorized, "OAuth was declined.")
@@ -98,27 +103,29 @@ func (s *SpotifyConnector) SetOauthCode(c echo.Context) error {
 		return c.String(http.StatusInternalServerError, "An unknown error occurred.")
 	}
 	s.oauthCode = c.QueryParam("code")
-	logger.Info("Connector has recieved a code", "code", s.oauthCode)
+
+	err := s.getAccessToken()
+	if err != nil {
+		return c.String(
+            http.StatusInternalServerError,
+            "An error occured retrieving an access token: "+err.Error())
+	}
+
 	return c.String(http.StatusOK, "You have been authorized.")
 }
 
-func (c *SpotifyConnector) GetAccessToken() error {
-	params := map[string]string{
-		"client_id":     c.ClientID,
-		"grant_type":    "authorization_code",
-		"code":          c.oauthCode,
-		"code_verifier": c.codeVerifier,
-		"redirect_uri":  "http://127.0.0.1:6838/callback",
-	}
-	paramsJSON, err := json.Marshal(params)
-	if err != nil {
-		return err
-	}
+func (c *SpotifyConnector) getAccessToken() error {
+	params := url.Values{}
+	params.Add("client_id", c.ClientID)
+	params.Add("code", c.oauthCode)
+	params.Add("code_verifier", c.codeVerifier)
+	params.Add("redirect_uri", "http://127.0.0.1:6838/callback")
+	params.Add("grant_type", "authorization_code")
 
 	req, err := http.NewRequest(
 		"POST",
 		"https://accounts.spotify.com/api/token",
-		bytes.NewBuffer(paramsJSON))
+		bytes.NewBuffer([]byte(params.Encode())))
 	if err != nil {
 		return err
 	}
@@ -131,6 +138,37 @@ func (c *SpotifyConnector) GetAccessToken() error {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != 200 {
+		var spotifyError SpotifyError
+		err = json.NewDecoder(resp.Body).Decode(&spotifyError)
+		if err != nil {
+			return err
+		}
+		return errors.New("[" + spotifyError.Error + "]" + ": " + spotifyError.ErrorDescription)
+	}
+
+	type accessToken struct {
+		Token        string `json:"access_token"`
+		TokenType    string `json:"token_type"`
+		Scope        string `json:"scope"`
+		ExpiresIn    int    `json:"expires_in"`
+		RefreshToken string `json:"refresh_token"`
+	}
+
+	var token accessToken
+	err = json.NewDecoder(resp.Body).Decode(&token)
+	if err != nil {
+		return err
+	}
+
+    expiresIn := time.Now().Add(time.Duration(token.ExpiresIn) * time.Second)
+
+	c.accessToken = SpotifyAccessToken{
+        Token: token.Token,
+        ExpiresIn: expiresIn,
+        Scope: token.Scope,
+        RefreshToken: token.RefreshToken,
+    }
 	return nil
 }
 
@@ -146,5 +184,6 @@ func generateCodeVerifierAndChallenge(size int64) (string, string, error) {
 	}
 	bAsSha := sha256.Sum256(b)
 	shaAsB64 := base64.URLEncoding.EncodeToString(bAsSha[:])
-	return string(b), shaAsB64, nil
+	shaNoEquals := strings.ReplaceAll(shaAsB64, "=", "")
+	return string(b), shaNoEquals, nil
 }

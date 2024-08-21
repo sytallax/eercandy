@@ -34,9 +34,9 @@ func main() {
 		if err != nil {
 			return err
 		}
-		return c.String(http.StatusOK, "Follow this link: "+authURL)
+		return c.String(http.StatusOK, authURL)
 	})
-	e.GET("/callback", connector.SetOauthCode)
+	e.GET("/callback", connector.GetAccessToken)
 
 	e.Logger.Fatal(e.Start(":6838"))
 }
