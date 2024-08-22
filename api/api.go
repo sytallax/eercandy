@@ -104,7 +104,7 @@ func (s *SpotifyConnector) GetAccessToken(c echo.Context) error {
 	}
 	s.oauthCode = c.QueryParam("code")
 
-	err := s.getAccessToken()
+	err := s.getAccessTokenFromSpotify()
 	if err != nil {
 		return c.String(
             http.StatusInternalServerError,
@@ -114,7 +114,7 @@ func (s *SpotifyConnector) GetAccessToken(c echo.Context) error {
 	return c.String(http.StatusOK, "You have been authorized.")
 }
 
-func (c *SpotifyConnector) getAccessToken() error {
+func (c *SpotifyConnector) getAccessTokenFromSpotify() error {
 	params := url.Values{}
 	params.Add("client_id", c.ClientID)
 	params.Add("code", c.oauthCode)
