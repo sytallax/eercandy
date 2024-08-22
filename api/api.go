@@ -37,6 +37,10 @@ type SpotifyConnector struct {
 	accessToken  SpotifyAccessToken
 }
 
+func (c SpotifyConnector) AccessToken() SpotifyAccessToken {
+	return c.accessToken
+}
+
 type SpotifyAccessToken struct {
 	Token        string
 	ExpiresIn    time.Time
@@ -107,8 +111,8 @@ func (s *SpotifyConnector) GetAccessToken(c echo.Context) error {
 	err := s.getAccessTokenFromSpotify()
 	if err != nil {
 		return c.String(
-            http.StatusInternalServerError,
-            "An error occured retrieving an access token: "+err.Error())
+			http.StatusInternalServerError,
+			"An error occured retrieving an access token: "+err.Error())
 	}
 
 	return c.String(http.StatusOK, "You have been authorized.")
@@ -161,15 +165,86 @@ func (c *SpotifyConnector) getAccessTokenFromSpotify() error {
 		return err
 	}
 
-    expiresIn := time.Now().Add(time.Duration(token.ExpiresIn) * time.Second)
+	expiresIn := time.Now().Add(time.Duration(token.ExpiresIn) * time.Second)
 
 	c.accessToken = SpotifyAccessToken{
-        Token: token.Token,
-        ExpiresIn: expiresIn,
-        Scope: token.Scope,
-        RefreshToken: token.RefreshToken,
-    }
+		Token:        token.Token,
+		ExpiresIn:    expiresIn,
+		Scope:        token.Scope,
+		RefreshToken: token.RefreshToken,
+	}
 	return nil
+}
+
+type SpotifyUser struct {
+	DisplayName string
+	SpotifyID   string
+	Email       string
+	URL         string
+}
+
+func (c *SpotifyConnector) FetchCurrentUser() (*SpotifyUser, error) {
+	req, err := http.NewRequest("GET", "https://api.spotify.com/v1/me", bytes.NewBuffer([]byte{}))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.AccessToken().Token)
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		var spotifyError SpotifyError
+		err = json.NewDecoder(resp.Body).Decode(&spotifyError)
+		if err != nil {
+			return nil, err
+		}
+		return nil, errors.New("[" + spotifyError.Error + "]" + ": " + spotifyError.ErrorDescription)
+	}
+
+	type User struct {
+		Country         string `json:"country"`
+		DisplayName     string `json:"display_name"`
+		Email           string `json:"email"`
+		ExplicitContent struct {
+			FilterEnabled bool `json:"filter_enabled"`
+			FilterLocked  bool `json:"filter_locked"`
+		} `json:"explicit_content"`
+		ExternalUrls struct {
+			Spotify string `json:"spotify"`
+		} `json:"external_urls"`
+		Followers struct {
+			Href  string `json:"href"`
+			Total int    `json:"total"`
+		} `json:"followers"`
+		Href   string `json:"href"`
+		ID     string `json:"id"`
+		Images []struct {
+			URL    string `json:"url"`
+			Height int    `json:"height"`
+			Width  int    `json:"width"`
+		} `json:"images"`
+		Product string `json:"product"`
+		Type    string `json:"type"`
+		URI     string `json:"uri"`
+	}
+
+	var user User
+	err = json.NewDecoder(resp.Body).Decode(&user)
+	if err != nil {
+		return nil, err
+	}
+
+	return &SpotifyUser{
+		DisplayName: user.DisplayName,
+		SpotifyID:   user.URI,
+		Email:       user.Email,
+		URL:         user.ExternalUrls.Spotify,
+	}, nil
 }
 
 func generateCodeVerifierAndChallenge(size int64) (string, string, error) {

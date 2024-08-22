@@ -37,6 +37,14 @@ func main() {
 		return c.String(http.StatusOK, authURL)
 	})
 	e.GET("/callback", connector.GetAccessToken)
+	e.GET("/me", func(c echo.Context) error {
+		user, err := connector.FetchCurrentUser()
+		if err != nil {
+			logger.Error("Could not fetch current user", "error", err.Error())
+			return c.String(http.StatusInternalServerError, "Could not fetch current user. Error: "+err.Error())
+		}
+		return c.String(http.StatusOK, "Account for "+user.DisplayName+": Email is "+user.Email+" and URL is "+user.URL)
+	})
 
 	e.Logger.Fatal(e.Start(":6838"))
 }
